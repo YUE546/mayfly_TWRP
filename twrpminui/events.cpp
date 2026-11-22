@@ -256,6 +256,28 @@ static int vibrate_with_ff(int timeout_ms) {
         return -1;
     }
 
+    /* Drivers with their own play handler (e.g. qcom-hv-haptics on sm8475
+     * devices) ignore replay.length and keep the effect running until it is
+     * removed or played with value=0. Without this the motor vibrates
+     * forever, only stopping at the *next* vibrate() call (via the EVIOCRMFF
+     * above) or on reboot. Stop the effect from a detached thread after the
+     * timeout. Verified on Xiaomi 12S (mayfly): the haptic used to buzz until
+     * the next touch; with this it stops after timeout_ms. */
+    std::thread([fd, id = effect.id, timeout_ms] {
+        usleep(timeout_ms * 1000);
+
+        struct input_event stop = {};
+        stop.type = EV_FF;
+        stop.code = id;
+        stop.value = 0;
+        if (write(fd, &stop, sizeof(stop)) != static_cast<ssize_t>(sizeof(stop)))
+            LOGE("Unable to stop force-feedback effect %d: %s\n",
+                 id, strerror(errno));
+        ioctl(fd, EVIOCRMFF, id);
+        if (ff_haptics_fd == fd && ff_haptics_effect_id == id)
+            ff_haptics_effect_id = -1;
+    }).detach();
+
     return 0;
 }
 
